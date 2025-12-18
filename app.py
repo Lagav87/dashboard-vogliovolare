@@ -388,18 +388,85 @@ with tab3:
                 df_yoy_disp[col] = df_yoy_disp[col].apply(lambda x: f"+{x:.1f}%" if pd.notna(x) and x > 0 else (f"{x:.1f}%" if pd.notna(x) else "-"))
         st.dataframe(df_yoy_disp, use_container_width=True, hide_index=True)
     
-    # Trend confronto
-    st.markdown("##### Trend Mensile Richieste - Confronto Anni")
-    anni_trend = st.multiselect("Anni da confrontare", anni_richiesta, default=anni_richiesta[-2:] if len(anni_richiesta) >= 2 else anni_richiesta)
+    # Trend confronto mensile per metrica
+    st.markdown("##### Trend Mensile - Confronto Anni")
+    
+    col_metrica, col_anni = st.columns([1, 2])
+    with col_metrica:
+        metrica_trend = st.selectbox("Metrica da confrontare", [
+            "Richieste Arrivate", "Fatturato", "Margine", "Convertite", "PAX", "Conversion Rate %"
+        ], key="metrica_trend")
+    with col_anni:
+        anni_trend = st.multiselect("Anni da confrontare", anni_viaggio, default=anni_viaggio[-2:] if len(anni_viaggio) >= 2 else anni_viaggio)
     
     if anni_trend:
         fig_trend = go.Figure()
+        mesi = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic']
+        
         for i, anno in enumerate(anni_trend):
-            df_a = df[df["ANNO_RICHIESTA"] == anno]
-            monthly = df_a.groupby("MESE_RICHIESTA").size().reset_index(name="Pratiche")
-            monthly["Mese_Nome"] = monthly["MESE_RICHIESTA"].apply(lambda x: mesi[int(x)-1] if pd.notna(x) and 1 <= x <= 12 else "")
-            fig_trend.add_trace(go.Scatter(x=monthly["Mese_Nome"], y=monthly["Pratiche"], name=str(anno), mode='lines+markers', line=dict(width=3, color=COLORS['year_colors'][i % len(COLORS['year_colors'])])))
-        fig_trend.update_layout(title="Richieste per Mese", height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color=COLORS['text']), legend=dict(orientation='h', y=1.1))
+            # Scelgo se usare anno richiesta o anno viaggio in base alla metrica
+            if metrica_trend == "Richieste Arrivate":
+                df_a = df[df["ANNO_RICHIESTA"] == anno]
+                col_mese = "MESE_RICHIESTA"
+            else:
+                df_a = df[df["ANNO_VIAGGIO"] == anno]
+                col_mese = "MESE_VIAGGIO"
+            
+            # Calcolo metrica per mese
+            if metrica_trend == "Richieste Arrivate":
+                monthly = df_a.groupby(col_mese).size().reset_index(name="Valore")
+            elif metrica_trend == "Fatturato":
+                conv_a = df_a[df_a["TIPO"] == "CONVERTITA"]
+                monthly = conv_a.groupby(col_mese)["FATTURATO TOT"].sum().reset_index(name="Valore")
+            elif metrica_trend == "Margine":
+                conv_a = df_a[df_a["TIPO"] == "CONVERTITA"]
+                monthly = conv_a.groupby(col_mese)["MARGINE LORDO"].sum().reset_index(name="Valore")
+            elif metrica_trend == "Convertite":
+                conv_a = df_a[df_a["TIPO"] == "CONVERTITA"]
+                monthly = conv_a.groupby(col_mese).size().reset_index(name="Valore")
+            elif metrica_trend == "PAX":
+                conv_a = df_a[df_a["TIPO"] == "CONVERTITA"]
+                monthly = conv_a.groupby(col_mese)["N DI PAX"].sum().reset_index(name="Valore")
+            elif metrica_trend == "Conversion Rate %":
+                # Calcolo CR per mese
+                cr_data = []
+                for mese in range(1, 13):
+                    df_mese = df_a[df_a[col_mese] == mese]
+                    conv_mese = len(df_mese[df_mese["TIPO"] == "CONVERTITA"])
+                    lav_mese = len(df_mese[df_mese["TIPO"] == "IN LAVORAZIONE"])
+                    chiuse_mese = len(df_mese) - lav_mese
+                    cr_mese = (conv_mese / chiuse_mese * 100) if chiuse_mese > 0 else 0
+                    cr_data.append({col_mese: mese, "Valore": cr_mese})
+                monthly = pd.DataFrame(cr_data)
+            
+            monthly["Mese_Nome"] = monthly[col_mese].apply(lambda x: mesi[int(x)-1] if pd.notna(x) and 1 <= x <= 12 else "")
+            monthly = monthly.sort_values(col_mese)
+            
+            fig_trend.add_trace(go.Scatter(
+                x=monthly["Mese_Nome"], 
+                y=monthly["Valore"], 
+                name=str(anno), 
+                mode='lines+markers', 
+                line=dict(width=3, color=COLORS['year_colors'][i % len(COLORS['year_colors'])]),
+                marker=dict(size=8)
+            ))
+        
+        # Formattazione asse Y in base alla metrica
+        if metrica_trend in ["Fatturato", "Margine"]:
+            fig_trend.update_layout(yaxis=dict(tickformat="€,.0f"))
+        elif metrica_trend == "Conversion Rate %":
+            fig_trend.update_layout(yaxis=dict(ticksuffix="%", range=[0, 100]))
+        
+        fig_trend.update_layout(
+            title=f"{metrica_trend} per Mese",
+            height=400, 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            plot_bgcolor='rgba(0,0,0,0)', 
+            font=dict(color=COLORS['text']), 
+            legend=dict(orientation='h', y=1.1),
+            yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+            xaxis=dict(categoryorder='array', categoryarray=mesi)
+        )
         st.plotly_chart(fig_trend, use_container_width=True)
 
 # =============================================================================
@@ -588,6 +655,7 @@ with tab6:
             "Non Conv.": non_conv_count,
             "CR %": (len(conv) / chiuse * 100) if chiuse > 0 else 0,
             "Fatturato": conv["FATTURATO TOT"].sum(),
+            "Margine": conv["MARGINE LORDO"].sum(),
             "Margine %": (conv["MARGINE LORDO"].sum() / conv["FATTURATO TOT"].sum() * 100) if conv["FATTURATO TOT"].sum() > 0 else 0
         })
     
@@ -610,13 +678,23 @@ with tab6:
         df_team_disp["Margine %"] = df_team_disp["Margine %"].round(1)
         st.dataframe(df_team_disp, use_container_width=True, hide_index=True)
     
-    with st.expander("📊 Dettaglio Fatturato"):
-        df_fatt = df_team[["Assegnato", "Fatturato", "Convertite"]].copy()
+    with st.expander("📊 Dettaglio Fatturato e Margini"):
+        df_fatt = df_team[["Assegnato", "Fatturato", "Margine", "Margine %", "Convertite"]].copy()
         df_fatt["Fatt. Medio"] = (df_fatt["Fatturato"] / df_fatt["Convertite"]).fillna(0)
+        df_fatt["Margine Medio"] = (df_fatt["Margine"] / df_fatt["Convertite"]).fillna(0)
+        df_fatt["Margine %"] = df_fatt["Margine %"].round(1)
         df_fatt["Fatturato"] = df_fatt["Fatturato"].apply(fmt_curr)
+        df_fatt["Margine"] = df_fatt["Margine"].apply(fmt_curr)
         df_fatt["Fatt. Medio"] = df_fatt["Fatt. Medio"].apply(fmt_curr)
+        df_fatt["Margine Medio"] = df_fatt["Margine Medio"].apply(fmt_curr)
+        df_fatt = df_fatt[["Assegnato", "Fatturato", "Margine", "Margine %", "Fatt. Medio", "Margine Medio", "Convertite"]]
         st.dataframe(df_fatt, use_container_width=True, hide_index=True)
 
 # --- FOOTER ---
 st.markdown("---")
 st.caption(f"Dashboard aggiornata al {datetime.now().strftime('%d/%m/%Y %H:%M')} | {len(df)} pratiche totali")
+
+
+
+
+
